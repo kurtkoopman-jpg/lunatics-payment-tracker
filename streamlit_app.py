@@ -10,12 +10,10 @@ ADMIN_PASSWORD = "lunatics123"
 MATCH_FEE = 140
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1ciOxcRHuexPgvkcgcvJTmWXwHpnmPm_TXpSKLbOuT_U/edit"
 
-# Setup Google Sheets Credentials
-@st.cache_resource(ttl=0)
+# 1. Authorize gspread client
+@st.cache_resource
 def get_gspread_client():
     sec = st.secrets["connections"]["gsheets"]
-    
-    # Reconstruct dictionary directly from TOML secrets
     creds_dict = {
         "type": sec.get("type", "service_account"),
         "project_id": sec["project_id"],
@@ -36,24 +34,25 @@ def get_gspread_client():
     credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     return gspread.authorize(credentials)
 
-try:
+# 2. Cache data fetching for 60 seconds to prevent API Quota Limits (429)
+@st.cache_data(ttl=60)
+def load_data():
     gc = get_gspread_client()
     sh = gc.open_by_url(SPREADSHEET_URL)
     worksheet = sh.sheet1
-    
-    # Load sheet data into pandas
     data = worksheet.get_all_records()
     if data:
-        df = pd.DataFrame(data)
-    else:
-        df = pd.DataFrame(columns=["Player", "Total Paid (R)"])
+        return pd.DataFrame(data)
+    return pd.DataFrame(columns=["Player", "Total Paid (R)"])
+
+try:
+    df = load_data()
 except Exception as e:
-    # PRINT FULL EXCEPTION DETAILS TO FRONTEND FOR INSTANT DIAGNOSIS
     st.error(f"❌ Connection Error Details: {type(e).__name__} — {str(e)}")
     st.exception(e)
     st.stop()
 
-# Clean boolean types for match attendance
+# Ensure boolean types for match attendance
 for col in df.columns:
     if col not in ["Player", "Total Paid (R)"]:
         df[col] = df[col].astype(bool)
@@ -64,6 +63,10 @@ user_pwd = st.sidebar.text_input("Enter Admin Password to Edit", type="password"
 is_admin = (user_pwd == ADMIN_PASSWORD)
 
 def save_to_sheets(updated_df):
+    gc = get_gspread_client()
+    sh = gc.open_by_url(SPREADSHEET_URL)
+    worksheet = sh.sheet1
+    
     export_df = updated_df.copy()
     for col in export_df.columns:
         if col not in ["Player", "Total Paid (R)"]:
@@ -71,6 +74,7 @@ def save_to_sheets(updated_df):
             
     worksheet.clear()
     worksheet.update([export_df.columns.values.tolist()] + export_df.values.tolist())
+    st.cache_data.clear()  # Clear cache after saving so new data reflects instantly
 
 if is_admin:
     st.sidebar.success("Admin Unlocked ✅")
