@@ -10,8 +10,8 @@ ADMIN_PASSWORD = "lunatics123"
 MATCH_FEE = 140
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1ciOxcRHuexPgvkcgcvJTmWXwHpnmPm_TXpSKLbOuT_U/edit"
 
-# Helper to build fresh credentials without caching connection objects
-def get_worksheet():
+# Helper to authorize gspread client once per script execution
+def get_gspread_client():
     sec = dict(st.secrets["connections"]["gsheets"])
     sec["private_key"] = sec["private_key"].replace("\\n", "\n")
     scopes = [
@@ -19,14 +19,14 @@ def get_worksheet():
         "https://www.googleapis.com/auth/drive"
     ]
     credentials = Credentials.from_service_account_info(sec, scopes=scopes)
-    gc = gspread.authorize(credentials)
-    sh = gc.open_by_url(SPREADSHEET_URL)
-    return sh.sheet1
+    return gspread.authorize(credentials)
 
-# CACHE ONLY THE CLEAN DATAFRAME (TTL = 60 seconds)
+# CACHE ONLY THE RAW DATAFRAME FOR 60s
 @st.cache_data(ttl=60)
 def fetch_sheet_data():
-    worksheet = get_worksheet()
+    gc = get_gspread_client()
+    sh = gc.open_by_url(SPREADSHEET_URL)
+    worksheet = sh.sheet1
     data = worksheet.get_all_records()
     if data:
         return pd.DataFrame(data)
@@ -46,15 +46,23 @@ for col in df.columns:
 
 # --- SAVE FUNCTION ---
 def save_to_sheets(updated_df):
-    worksheet = get_worksheet()
-    export_df = updated_df.copy()
-    for col in export_df.columns:
-        if col not in ["Player", "Total Paid (R)"]:
-            export_df[col] = export_df[col].astype(str)
-            
-    worksheet.clear()
-    worksheet.update([export_df.columns.values.tolist()] + export_df.values.tolist())
-    st.cache_data.clear()  # Instantly flush cache so updates appear immediately
+    try:
+        gc = get_gspread_client()
+        sh = gc.open_by_url(SPREADSHEET_URL)
+        worksheet = sh.sheet1
+        
+        export_df = updated_df.copy()
+        for col in export_df.columns:
+            if col not in ["Player", "Total Paid (R)"]:
+                export_df[col] = export_df[col].astype(str)
+                
+        worksheet.clear()
+        worksheet.update([export_df.columns.values.tolist()] + export_df.values.tolist())
+        st.cache_data.clear()  # Flush local cache so changes reflect instantly
+        return True
+    except Exception as e:
+        st.error(f"⚠️ Could not save to Google Sheets (Rate limit or network delay): {str(e)}")
+        return False
 
 # --- SIDEBAR: ADMIN CONTROLS ---
 st.sidebar.header("🔒 Admin Access")
@@ -70,9 +78,9 @@ if is_admin:
     if st.sidebar.button("Add Fixture"):
         if fixture_name and fixture_name not in df.columns:
             df[fixture_name] = False
-            save_to_sheets(df)
-            st.sidebar.success(f"Added fixture '{fixture_name}'!")
-            st.rerun()
+            if save_to_sheets(df):
+                st.sidebar.success(f"Added fixture '{fixture_name}'!")
+                st.rerun()
         elif fixture_name in df.columns:
             st.sidebar.warning("Fixture already exists!")
 
@@ -82,9 +90,9 @@ if is_admin:
         fixture_to_remove = st.sidebar.selectbox("Select fixture to remove", existing_fixtures)
         if st.sidebar.button("Remove Selected Fixture"):
             df = df.drop(columns=[fixture_to_remove])
-            save_to_sheets(df)
-            st.sidebar.success(f"Removed '{fixture_to_remove}'")
-            st.rerun()
+            if save_to_sheets(df):
+                st.sidebar.success(f"Removed '{fixture_to_remove}'")
+                st.rerun()
 
 # --- MAIN TABLE ---
 st.subheader("📋 Match Attendance & Payments")
@@ -103,9 +111,9 @@ if is_admin:
     )
     
     if not edited_df.equals(df):
-        save_to_sheets(edited_df)
-        st.toast("Saved to Google Sheets! ✅")
-        st.rerun()
+        if save_to_sheets(edited_df):
+            st.toast("Saved to Google Sheets! ✅")
+            st.rerun()
 else:
     st.warning("👁️ Read-Only Mode: Enter password in sidebar to edit.")
     st.dataframe(df, hide_index=True, use_container_width=True)
@@ -137,7 +145,7 @@ def get_status(bal):
     else:
         return f"Owes R {bal:.0f} 🔴"
 
-summary_df["Status"] = summary_df["Balance (R)"].apply(get_status)
+summary_df["Status"] = summary_df["Balance (R)"] .apply(get_status)
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Total Fees Owed", f"R {summary_df['Total Owed (R)'].sum():,.0f}")
