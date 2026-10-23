@@ -10,13 +10,12 @@ ADMIN_PASSWORD = "lunatics123"
 MATCH_FEE = 140
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1ciOxcRHuexPgvkcgcvJTmWXwHpnmPm_TXpSKLbOuT_U/edit"
 
-# --- DIRECT CONNECTION WITHOUT DECORATORS ---
+st.write("⏳ Initializing connection...")
+
 try:
-    st.write("🔄 Step 1: Parsing secrets...")
     sec = dict(st.secrets["connections"]["gsheets"])
     sec["private_key"] = sec["private_key"].replace("\\n", "\n")
     
-    st.write("🔄 Step 2: Creating credentials...")
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
@@ -24,17 +23,15 @@ try:
     credentials = Credentials.from_service_account_info(sec, scopes=scopes)
     gc = gspread.authorize(credentials)
     
-    st.write("🔄 Step 3: Opening spreadsheet...")
     sh = gc.open_by_url(SPREADSHEET_URL)
     worksheet = sh.sheet1
     
-    st.write("🔄 Step 4: Reading data...")
     data = worksheet.get_all_records()
     df = pd.DataFrame(data) if data else pd.DataFrame(columns=["Player", "Total Paid (R)"])
-    st.success("✅ Connected & loaded data successfully!")
+    st.success("✅ Connected to Google Sheets!")
 
 except Exception as e:
-    st.error(f"❌ Execution stopped at error: {type(e).__name__} — {str(e)}")
+    st.error(f"❌ Error during load: {type(e).__name__} — {str(e)}")
     st.exception(e)
     st.stop()
 
@@ -60,7 +57,7 @@ def save_to_sheets(updated_df):
 if is_admin:
     st.sidebar.success("Admin Unlocked ✅")
     
-    # 1. ADD FIXTURE
+    # Add Fixture
     st.sidebar.header("➕ Add New Fixture")
     fixture_name = st.sidebar.text_input("Fixture Name (e.g., Misfits, Match 3)")
 
@@ -75,7 +72,7 @@ if is_admin:
         else:
             st.sidebar.error("Please enter a fixture name.")
 
-    # 2. DELETE FIXTURE
+    # Delete Fixture
     st.sidebar.header("🗑️ Delete Fixture")
     existing_fixtures = [c for c in df.columns if c not in ["Player", "Total Paid (R)"]]
     if existing_fixtures:
