@@ -1,22 +1,44 @@
 import streamlit as st
 import pandas as pd
-from streamlit_gsheets import GSheetsConnection
+import gspread
+from google.oauth2.service_account import Credentials
 
-# Page setup
 st.set_page_config(page_title="Lunatics Cricket - Payment Tracker", layout="wide")
-
 st.title("🏏 Lunatics Cricket Club — Payment Tracker")
 
 ADMIN_PASSWORD = "lunatics123"
 MATCH_FEE = 140
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1ciOxcRHuexPgvkcgcvJTmWXwHpnmPm_TXpSKLbOuT_U/edit"
 
-# Connect to Google Sheets using the Service Account defined in Secrets
-conn = st.connection("gsheets", type=GSheetsConnection)
+# Connect via native gspread
+@st.cache_resource(ttl=0)
+def get_gspread_client():
+    creds_dict = dict(st.secrets["connections"]["gsheets"])
+    # Handle private key formatting cleanly
+    creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    return gspread.authorize(credentials)
 
-# Read live data from Google Sheets
-df = conn.read(ttl=0)
+try:
+    gc = get_gspread_client()
+    sh = gc.open_by_url(SPREADSHEET_URL)
+    worksheet = sh.sheet1
+    
+    # Load sheet data into pandas
+    data = worksheet.get_all_records()
+    if data:
+        df = pd.DataFrame(data)
+    else:
+        df = pd.DataFrame(columns=["Player", "Total Paid (R)"])
+except Exception as e:
+    st.error(f"Error connecting to Google Sheets: {e}")
+    st.stop()
 
-# Ensure fixture columns are boolean
+# Clean boolean types for match attendance
 for col in df.columns:
     if col not in ["Player", "Total Paid (R)"]:
         df[col] = df[col].astype(bool)
@@ -25,6 +47,15 @@ for col in df.columns:
 st.sidebar.header("🔒 Admin Access")
 user_pwd = st.sidebar.text_input("Enter Admin Password to Edit", type="password")
 is_admin = (user_pwd == ADMIN_PASSWORD)
+
+def save_to_sheets(updated_df):
+    export_df = updated_df.copy()
+    for col in export_df.columns:
+        if col not in ["Player", "Total Paid (R)"]:
+            export_df[col] = export_df[col].astype(str)
+            
+    worksheet.clear()
+    worksheet.update([export_df.columns.values.tolist()] + export_df.values.tolist())
 
 if is_admin:
     st.sidebar.success("Admin Unlocked ✅")
@@ -36,7 +67,7 @@ if is_admin:
     if st.sidebar.button("Add Fixture"):
         if fixture_name and fixture_name not in df.columns:
             df[fixture_name] = False
-            conn.update(data=df)
+            save_to_sheets(df)
             st.sidebar.success(f"Added fixture '{fixture_name}'!")
             st.rerun()
         elif fixture_name in df.columns:
@@ -51,7 +82,7 @@ if is_admin:
         fixture_to_remove = st.sidebar.selectbox("Select fixture to remove", existing_fixtures)
         if st.sidebar.button("Remove Selected Fixture"):
             df = df.drop(columns=[fixture_to_remove])
-            conn.update(data=df)
+            save_to_sheets(df)
             st.sidebar.success(f"Removed '{fixture_to_remove}'")
             st.rerun()
 
@@ -71,9 +102,8 @@ if is_admin:
         use_container_width=True
     )
     
-    # Write back changes automatically to Google Sheets
     if not edited_df.equals(df):
-        conn.update(data=edited_df)
+        save_to_sheets(edited_df)
         st.toast("Saved changes to Google Sheets! ✅")
         st.rerun()
 else:
