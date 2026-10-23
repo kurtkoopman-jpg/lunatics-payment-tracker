@@ -10,12 +10,24 @@ ADMIN_PASSWORD = "lunatics123"
 MATCH_FEE = 140
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1ciOxcRHuexPgvkcgcvJTmWXwHpnmPm_TXpSKLbOuT_U/edit"
 
-# Connect via native gspread
+# Setup Google Sheets Credentials cleanly from Secrets
 @st.cache_resource(ttl=0)
 def get_gspread_client():
-    creds_dict = dict(st.secrets["connections"]["gsheets"])
-    # Handle private key formatting cleanly
-    creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+    # Safely pull service account dictionary from secrets
+    sec = st.secrets["connections"]["gsheets"]
+    creds_dict = {
+        "type": sec["type"],
+        "project_id": sec["project_id"],
+        "private_key_id": sec["private_key_id"],
+        "private_key": sec["private_key"].replace("\\n", "\n"),
+        "client_email": sec["client_email"],
+        "client_id": sec["client_id"],
+        "auth_uri": sec["auth_uri"],
+        "token_uri": sec["token_uri"],
+        "auth_provider_x509_cert_url": sec["auth_provider_x509_cert_url"],
+        "client_x509_cert_url": sec["client_x509_cert_url"],
+    }
+    
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
@@ -38,7 +50,7 @@ except Exception as e:
     st.error(f"Error connecting to Google Sheets: {e}")
     st.stop()
 
-# Clean boolean types for match attendance
+# Ensure boolean types for match attendance
 for col in df.columns:
     if col not in ["Player", "Total Paid (R)"]:
         df[col] = df[col].astype(bool)
