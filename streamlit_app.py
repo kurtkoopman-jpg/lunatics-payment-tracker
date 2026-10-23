@@ -10,7 +10,7 @@ ADMIN_PASSWORD = "lunatics123"
 MATCH_FEE = 140
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1ciOxcRHuexPgvkcgcvJTmWXwHpnmPm_TXpSKLbOuT_U/edit"
 
-# Helper to authorize gspread client once per script execution
+# Helper to authorize gspread client once
 def get_gspread_client():
     sec = dict(st.secrets["connections"]["gsheets"])
     sec["private_key"] = sec["private_key"].replace("\\n", "\n")
@@ -21,7 +21,7 @@ def get_gspread_client():
     credentials = Credentials.from_service_account_info(sec, scopes=scopes)
     return gspread.authorize(credentials)
 
-# CACHE ONLY THE RAW DATAFRAME FOR 60s
+# CACHE READS FOR 60s TO PREVENT 429 ERRORS
 @st.cache_data(ttl=60)
 def fetch_sheet_data():
     gc = get_gspread_client()
@@ -58,7 +58,7 @@ def save_to_sheets(updated_df):
                 
         worksheet.clear()
         worksheet.update([export_df.columns.values.tolist()] + export_df.values.tolist())
-        st.cache_data.clear()  # Flush local cache so changes reflect instantly
+        st.cache_data.clear()  # Flush cache after saving
         return True
     except Exception as e:
         st.error(f"⚠️ Could not save to Google Sheets (Rate limit or network delay): {str(e)}")
@@ -98,7 +98,7 @@ if is_admin:
 st.subheader("📋 Match Attendance & Payments")
 
 if is_admin:
-    st.info("🔓 Admin Mode Active: Edits sync directly to Google Sheets.")
+    st.info("🔓 Admin Mode Active: Make your edits in the table below and click 'Save Changes to Google Sheets'.")
     edited_df = st.data_editor(
         df,
         column_config={
@@ -110,9 +110,10 @@ if is_admin:
         use_container_width=True
     )
     
-    if not edited_df.equals(df):
+    # Batch save button to prevent quota issues on rapid edits
+    if st.button("💾 Save Changes to Google Sheets", type="primary"):
         if save_to_sheets(edited_df):
-            st.toast("Saved to Google Sheets! ✅")
+            st.success("Successfully saved all changes to Google Sheets! ✅")
             st.rerun()
 else:
     st.warning("👁️ Read-Only Mode: Enter password in sidebar to edit.")
@@ -145,7 +146,7 @@ def get_status(bal):
     else:
         return f"Owes R {bal:.0f} 🔴"
 
-summary_df["Status"] = summary_df["Balance (R)"] .apply(get_status)
+summary_df["Status"] = summary_df["Balance (R)"].apply(get_status)
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Total Fees Owed", f"R {summary_df['Total Owed (R)'].sum():,.0f}")
