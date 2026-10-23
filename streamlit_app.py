@@ -10,22 +10,23 @@ ADMIN_PASSWORD = "lunatics123"
 MATCH_FEE = 140
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1ciOxcRHuexPgvkcgcvJTmWXwHpnmPm_TXpSKLbOuT_U/edit"
 
-# Setup Google Sheets Credentials cleanly from Secrets
+# Setup Google Sheets Credentials
 @st.cache_resource(ttl=0)
 def get_gspread_client():
-    # Safely pull service account dictionary from secrets
     sec = st.secrets["connections"]["gsheets"]
+    
+    # Reconstruct dictionary directly from TOML secrets
     creds_dict = {
-        "type": sec["type"],
+        "type": sec.get("type", "service_account"),
         "project_id": sec["project_id"],
         "private_key_id": sec["private_key_id"],
         "private_key": sec["private_key"].replace("\\n", "\n"),
         "client_email": sec["client_email"],
         "client_id": sec["client_id"],
-        "auth_uri": sec["auth_uri"],
-        "token_uri": sec["token_uri"],
-        "auth_provider_x509_cert_url": sec["auth_provider_x509_cert_url"],
-        "client_x509_cert_url": sec["client_x509_cert_url"],
+        "auth_uri": sec.get("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
+        "token_uri": sec.get("token_uri", "https://oauth2.googleapis.com/token"),
+        "auth_provider_x509_cert_url": sec.get("auth_provider_x509_cert_url", "https://www.googleapis.com/oauth2/v1/certs"),
+        "client_x509_cert_url": sec.get("client_x509_cert_url", ""),
     }
     
     scopes = [
@@ -47,10 +48,12 @@ try:
     else:
         df = pd.DataFrame(columns=["Player", "Total Paid (R)"])
 except Exception as e:
-    st.error(f"Error connecting to Google Sheets: {e}")
+    # PRINT FULL EXCEPTION DETAILS TO FRONTEND FOR INSTANT DIAGNOSIS
+    st.error(f"❌ Connection Error Details: {type(e).__name__} — {str(e)}")
+    st.exception(e)
     st.stop()
 
-# Ensure boolean types for match attendance
+# Clean boolean types for match attendance
 for col in df.columns:
     if col not in ["Player", "Total Paid (R)"]:
         df[col] = df[col].astype(bool)
