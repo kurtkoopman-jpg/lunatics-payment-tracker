@@ -21,7 +21,7 @@ def get_gspread_client():
     credentials = Credentials.from_service_account_info(sec, scopes=scopes)
     return gspread.authorize(credentials)
 
-# CACHE READS WITH TTL (Can be manually cleared on save)
+# CACHE READS WITH TTL
 @st.cache_data(ttl=60)
 def fetch_sheet_data():
     gc = get_gspread_client()
@@ -54,13 +54,10 @@ def save_to_sheets(updated_df):
         export_df = updated_df.copy()
         for col in export_df.columns:
             if col not in ["Player", "Total Paid (R)"]:
-                # Send explicit uppercase string booleans for Google Sheets checkboxes
                 export_df[col] = export_df[col].apply(lambda x: "TRUE" if bool(x) else "FALSE")
                 
         worksheet.clear()
         worksheet.update([export_df.columns.values.tolist()] + export_df.values.tolist())
-        
-        # CLEAR CACHE IMMEDIATELY
         st.cache_data.clear()
         return True
     except Exception as e:
@@ -103,7 +100,6 @@ st.subheader("📋 Match Attendance & Payments")
 if is_admin:
     st.info("🔓 Admin Mode Active: Make your edits in the table below and click 'Save Changes to Google Sheets'.")
     
-    # Use a dynamic key based on whether we refreshed after a save
     editor_key = f"editor_{st.session_state.get('save_count', 0)}"
     
     edited_df = st.data_editor(
@@ -161,4 +157,20 @@ col1.metric("Total Fees Owed", f"R {summary_df['Total Owed (R)'].sum():,.0f}")
 col2.metric("Total Payments Collected", f"R {summary_df['Total Paid (R)'].sum():,.0f}")
 col3.metric("Outstanding Balance", f"R {summary_df['Balance (R)'].sum():,.0f}")
 
+# --- NEW: DEDICATED UNPAID PLAYERS VIEW ---
+st.markdown("### 🔴 Players Still Owing")
+owing_df = summary_df[summary_df["Balance (R)"] > 0][["Player", "Balance (R)"]].copy()
+
+if not owing_df.empty:
+    owing_df["Amount Owed"] = owing_df["Balance (R)"].apply(lambda x: f"R {x:.0f}")
+    st.dataframe(
+        owing_df[["Player", "Amount Owed"]],
+        hide_index=True,
+        use_container_width=True
+    )
+else:
+    st.success("🎉 All players are squared up or in credit!")
+
+# Full breakdown table
+st.markdown("### 🔍 Full Breakdown")
 st.dataframe(summary_df, hide_index=True, use_container_width=True)
