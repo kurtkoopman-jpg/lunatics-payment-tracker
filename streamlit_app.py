@@ -39,10 +39,10 @@ except Exception as e:
     st.exception(e)
     st.stop()
 
-# Ensure boolean data types for attendance columns
+# PROPER BOOLEAN CONVERSION FOR GOOGLE SHEETS TEXT
 for col in df.columns:
     if col not in ["Player", "Total Paid (R)"]:
-        df[col] = df[col].astype(bool)
+        df[col] = df[col].astype(str).str.upper().isin(["TRUE", "1"])
 
 # --- SAVE FUNCTION ---
 def save_to_sheets(updated_df):
@@ -54,7 +54,8 @@ def save_to_sheets(updated_df):
         export_df = updated_df.copy()
         for col in export_df.columns:
             if col not in ["Player", "Total Paid (R)"]:
-                export_df[col] = export_df[col].astype(str)
+                # Convert Python Booleans back to uppercase strings for Google Sheets
+                export_df[col] = export_df[col].apply(lambda x: "TRUE" if x else "FALSE")
                 
         worksheet.clear()
         worksheet.update([export_df.columns.values.tolist()] + export_df.values.tolist())
@@ -110,7 +111,6 @@ if is_admin:
         use_container_width=True
     )
     
-    # Batch save button to prevent quota issues on rapid edits
     if st.button("💾 Save Changes to Google Sheets", type="primary"):
         if save_to_sheets(edited_df):
             st.success("Successfully saved all changes to Google Sheets! ✅")
