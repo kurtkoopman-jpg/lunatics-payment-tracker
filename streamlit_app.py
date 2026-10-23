@@ -1,29 +1,25 @@
 import streamlit as st
 import pandas as pd
+from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="Lunatics Cricket - Payment Tracker", layout="wide")
 
 st.title("🏏 Lunatics Cricket Club — Payment Tracker")
 
-# Set your admin password here
+# Set Admin Password
 ADMIN_PASSWORD = "lunatics123"
-
-# Squad List
-PLAYERS = [
-    "Kurt Koopman", "Bjorn Harmse", "Earl Koopman", "Zamile Mqu",
-    "Paul Steyn", "Regan Koopman", "Sherwon Tarentaal", "Ashwin Isaacs",
-    "Roland Meder", "Rejean Maralack", "Rafique Gool", "Jay-Dee Kellies",
-    "Brandon Gordon"
-]
-
 MATCH_FEE = 140
 
-# Initialize Session Data
-if "tracker_data" not in st.session_state:
-    st.session_state.tracker_data = pd.DataFrame({
-        "Player": PLAYERS,
-        "Total Paid (R)": [0.0] * len(PLAYERS)
-    })
+# Connect to Google Sheets
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+# Fetch latest data from Google Sheet (cache TTL set to 0 to fetch live)
+df = conn.read(ttl=0)
+
+# Clean boolean columns (fixtures)
+for col in df.columns:
+    if col not in ["Player", "Total Paid (R)"]:
+        df[col] = df[col].astype(bool)
 
 # --- SIDEBAR: Admin Controls ---
 st.sidebar.header("🔒 Admin Access")
@@ -32,25 +28,40 @@ is_admin = (user_pwd == ADMIN_PASSWORD)
 
 if is_admin:
     st.sidebar.success("Admin Unlocked ✅")
+    
+    # 1. ADD FIXTURE
     st.sidebar.header("➕ Add New Fixture")
     fixture_name = st.sidebar.text_input("Fixture Name (e.g., Misfits, Match 3)")
 
     if st.sidebar.button("Add Fixture"):
-        if fixture_name and fixture_name not in st.session_state.tracker_data.columns:
-            st.session_state.tracker_data[fixture_name] = False
-            st.sidebar.success(f"Added fixture: {fixture_name}")
-        elif fixture_name in st.session_state.tracker_data.columns:
-            st.sidebar.warning("That fixture already exists!")
+        if fixture_name and fixture_name not in df.columns:
+            df[fixture_name] = False
+            conn.update(data=df)
+            st.sidebar.success(f"Added '{fixture_name}' to Google Sheet!")
+            st.rerun()
+        elif fixture_name in df.columns:
+            st.sidebar.warning("Fixture already exists!")
         else:
             st.sidebar.error("Please enter a fixture name.")
+
+    # 2. DELETE FIXTURE
+    st.sidebar.header("🗑️ Delete Fixture")
+    existing_fixtures = [c for c in df.columns if c not in ["Player", "Total Paid (R)"]]
+    if existing_fixtures:
+        fixture_to_remove = st.sidebar.selectbox("Select fixture to remove", existing_fixtures)
+        if st.sidebar.button("Remove Selected Fixture"):
+            df = df.drop(columns=[fixture_to_remove])
+            conn.update(data=df)
+            st.sidebar.success(f"Removed '{fixture_to_remove}'")
+            st.rerun()
 
 # --- MAIN TABLE ---
 st.subheader("📋 Match Attendance & Payments")
 
 if is_admin:
-    st.info("🔓 Admin Mode Active: You can edit match ticks and payments below.")
+    st.info("🔓 Admin Mode Active: Edits will automatically update the Google Sheet.")
     edited_df = st.data_editor(
-        st.session_state.tracker_data,
+        df,
         column_config={
             "Player": st.column_config.TextColumn("Player", disabled=True),
             "Total Paid (R)": st.column_config.NumberColumn("Total Paid (R)", min_value=0, step=10, format="R %d"),
@@ -59,17 +70,22 @@ if is_admin:
         hide_index=True,
         use_container_width=True
     )
-    st.session_state.tracker_data = edited_df
+    
+    # Auto-save changes back to Google Sheets if edited
+    if not edited_df.equals(df):
+        conn.update(data=edited_df)
+        st.toast("Saved changes to Google Sheets! ✅")
+        st.rerun()
 else:
-    st.warning("👁️ Read-Only Mode: Log in via sidebar to make edits.")
-    st.dataframe(st.session_state.tracker_data, hide_index=True, use_container_width=True)
-    edited_df = st.session_state.tracker_data
+    st.warning("👁️ Read-Only Mode: Log in via sidebar to edit.")
+    st.dataframe(df, hide_index=True, use_container_width=True)
+    edited_df = df
 
 # --- CALCULATIONS & DASHBOARD ---
 fixture_cols = [c for c in edited_df.columns if c not in ["Player", "Total Paid (R)"]]
 games_played = edited_df[fixture_cols].sum(axis=1) if fixture_cols else 0
 total_owed = games_played * MATCH_FEE
-total_paid = edited_df["Total Paid (R)"]
+total_paid = pd.to_numeric(edited_df["Total Paid (R)"], errors='coerce').fillna(0)
 balance = total_owed - total_paid
 
 st.markdown("---")
@@ -99,14 +115,3 @@ col2.metric("Total Payments Collected", f"R {summary_df['Total Paid (R)'].sum():
 col3.metric("Outstanding Balance", f"R {summary_df['Balance (R)'].sum():,.0f}")
 
 st.dataframe(summary_df, hide_index=True, use_container_width=True)
-
-# Backup option for Admin
-if is_admin:
-    st.sidebar.markdown("---")
-    csv_data = edited_df.to_csv(index=False)
-    st.sidebar.download_button(
-        label="📥 Backup Data (Download CSV)",
-        data=csv_data,
-        file_name="lunatics_payment_tracker.csv",
-        mime="text/csv"
-    )
