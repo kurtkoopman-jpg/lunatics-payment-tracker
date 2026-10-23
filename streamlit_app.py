@@ -21,7 +21,7 @@ def get_gspread_client():
     credentials = Credentials.from_service_account_info(sec, scopes=scopes)
     return gspread.authorize(credentials)
 
-# CACHE READS FOR 60s TO PREVENT 429 ERRORS
+# CACHE READS WITH TTL (Can be manually cleared on save)
 @st.cache_data(ttl=60)
 def fetch_sheet_data():
     gc = get_gspread_client()
@@ -39,7 +39,7 @@ except Exception as e:
     st.exception(e)
     st.stop()
 
-# PROPER BOOLEAN CONVERSION FOR GOOGLE SHEETS TEXT
+# PROPER BOOLEAN CONVERSION FOR GOOGLE SHEETS
 for col in df.columns:
     if col not in ["Player", "Total Paid (R)"]:
         df[col] = df[col].astype(str).str.upper().isin(["TRUE", "1"])
@@ -54,12 +54,14 @@ def save_to_sheets(updated_df):
         export_df = updated_df.copy()
         for col in export_df.columns:
             if col not in ["Player", "Total Paid (R)"]:
-                # Convert Python Booleans back to uppercase strings for Google Sheets
-                export_df[col] = export_df[col].apply(lambda x: "TRUE" if x else "FALSE")
+                # Send explicit uppercase string booleans for Google Sheets checkboxes
+                export_df[col] = export_df[col].apply(lambda x: "TRUE" if bool(x) else "FALSE")
                 
         worksheet.clear()
         worksheet.update([export_df.columns.values.tolist()] + export_df.values.tolist())
-        st.cache_data.clear()  # Flush cache after saving
+        
+        # CLEAR CACHE IMMEDIATELY
+        st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"⚠️ Could not save to Google Sheets (Rate limit or network delay): {str(e)}")
@@ -100,6 +102,10 @@ st.subheader("📋 Match Attendance & Payments")
 
 if is_admin:
     st.info("🔓 Admin Mode Active: Make your edits in the table below and click 'Save Changes to Google Sheets'.")
+    
+    # Use a dynamic key based on whether we refreshed after a save
+    editor_key = f"editor_{st.session_state.get('save_count', 0)}"
+    
     edited_df = st.data_editor(
         df,
         column_config={
@@ -108,11 +114,13 @@ if is_admin:
         },
         disabled=["Player"],
         hide_index=True,
-        use_container_width=True
+        use_container_width=True,
+        key=editor_key
     )
     
     if st.button("💾 Save Changes to Google Sheets", type="primary"):
         if save_to_sheets(edited_df):
+            st.session_state["save_count"] = st.session_state.get("save_count", 0) + 1
             st.success("Successfully saved all changes to Google Sheets! ✅")
             st.rerun()
 else:
