@@ -10,36 +10,43 @@ ADMIN_PASSWORD = "lunatics123"
 MATCH_FEE = 140
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1ciOxcRHuexPgvkcgcvJTmWXwHpnmPm_TXpSKLbOuT_U/edit"
 
-# --- PURE SEQUENTIAL EXECUTION (NO CACHING DECORATORS) ---
-try:
+# Helper to build fresh credentials without caching connection objects
+def get_worksheet():
     sec = dict(st.secrets["connections"]["gsheets"])
     sec["private_key"] = sec["private_key"].replace("\\n", "\n")
-    
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
     credentials = Credentials.from_service_account_info(sec, scopes=scopes)
     gc = gspread.authorize(credentials)
-    
     sh = gc.open_by_url(SPREADSHEET_URL)
-    worksheet = sh.sheet1
-    
-    data = worksheet.get_all_records()
-    df = pd.DataFrame(data) if data else pd.DataFrame(columns=["Player", "Total Paid (R)"])
+    return sh.sheet1
 
+# CACHE ONLY THE CLEAN DATAFRAME (TTL = 60 seconds)
+@st.cache_data(ttl=60)
+def fetch_sheet_data():
+    worksheet = get_worksheet()
+    data = worksheet.get_all_records()
+    if data:
+        return pd.DataFrame(data)
+    return pd.DataFrame(columns=["Player", "Total Paid (R)"])
+
+try:
+    df = fetch_sheet_data()
 except Exception as e:
     st.error(f"❌ Connection Error: {type(e).__name__} — {str(e)}")
     st.exception(e)
     st.stop()
 
-# Ensure boolean types for fixture columns
+# Ensure boolean data types for attendance columns
 for col in df.columns:
     if col not in ["Player", "Total Paid (R)"]:
         df[col] = df[col].astype(bool)
 
 # --- SAVE FUNCTION ---
 def save_to_sheets(updated_df):
+    worksheet = get_worksheet()
     export_df = updated_df.copy()
     for col in export_df.columns:
         if col not in ["Player", "Total Paid (R)"]:
@@ -47,6 +54,7 @@ def save_to_sheets(updated_df):
             
     worksheet.clear()
     worksheet.update([export_df.columns.values.tolist()] + export_df.values.tolist())
+    st.cache_data.clear()  # Instantly flush cache so updates appear immediately
 
 # --- SIDEBAR: ADMIN CONTROLS ---
 st.sidebar.header("🔒 Admin Access")
