@@ -10,9 +10,9 @@ ADMIN_PASSWORD = "lunatics123"
 MATCH_FEE = 140
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1ciOxcRHuexPgvkcgcvJTmWXwHpnmPm_TXpSKLbOuT_U/edit"
 
-st.write("⏳ Initializing connection...")
-
-try:
+# --- AUTHORIZE GSPREAD ---
+@st.cache_resource
+def get_gspread_client():
     sec = dict(st.secrets["connections"]["gsheets"])
     sec["private_key"] = sec["private_key"].replace("\\n", "\n")
     
@@ -21,31 +21,37 @@ try:
         "https://www.googleapis.com/auth/drive"
     ]
     credentials = Credentials.from_service_account_info(sec, scopes=scopes)
-    gc = gspread.authorize(credentials)
-    
+    return gspread.authorize(credentials)
+
+# --- LOAD DATA WITH 60s TTL ---
+@st.cache_data(ttl=60)
+def load_data():
+    gc = get_gspread_client()
     sh = gc.open_by_url(SPREADSHEET_URL)
     worksheet = sh.sheet1
-    
     data = worksheet.get_all_records()
-    df = pd.DataFrame(data) if data else pd.DataFrame(columns=["Player", "Total Paid (R)"])
-    st.success("✅ Connected to Google Sheets!")
+    if data:
+        return pd.DataFrame(data)
+    return pd.DataFrame(columns=["Player", "Total Paid (R)"])
 
+try:
+    df = load_data()
 except Exception as e:
-    st.error(f"❌ Error during load: {type(e).__name__} — {str(e)}")
+    st.error(f"❌ Connection Error: {type(e).__name__} — {str(e)}")
     st.exception(e)
     st.stop()
 
-# Ensure boolean types for attendance
+# Ensure boolean types for fixture columns
 for col in df.columns:
     if col not in ["Player", "Total Paid (R)"]:
         df[col] = df[col].astype(bool)
 
-# --- SIDEBAR: Admin Controls ---
-st.sidebar.header("🔒 Admin Access")
-user_pwd = st.sidebar.text_input("Enter Admin Password to Edit", type="password")
-is_admin = (user_pwd == ADMIN_PASSWORD)
-
+# --- SAVE FUNCTION ---
 def save_to_sheets(updated_df):
+    gc = get_gspread_client()
+    sh = gc.open_by_url(SPREADSHEET_URL)
+    worksheet = sh.sheet1
+    
     export_df = updated_df.copy()
     for col in export_df.columns:
         if col not in ["Player", "Total Paid (R)"]:
@@ -53,11 +59,16 @@ def save_to_sheets(updated_df):
             
     worksheet.clear()
     worksheet.update([export_df.columns.values.tolist()] + export_df.values.tolist())
+    st.cache_data.clear()
+
+# --- SIDEBAR: ADMIN CONTROLS ---
+st.sidebar.header("🔒 Admin Access")
+user_pwd = st.sidebar.text_input("Enter Admin Password to Edit", type="password")
+is_admin = (user_pwd == ADMIN_PASSWORD)
 
 if is_admin:
     st.sidebar.success("Admin Unlocked ✅")
     
-    # Add Fixture
     st.sidebar.header("➕ Add New Fixture")
     fixture_name = st.sidebar.text_input("Fixture Name (e.g., Misfits, Match 3)")
 
@@ -69,10 +80,7 @@ if is_admin:
             st.rerun()
         elif fixture_name in df.columns:
             st.sidebar.warning("Fixture already exists!")
-        else:
-            st.sidebar.error("Please enter a fixture name.")
 
-    # Delete Fixture
     st.sidebar.header("🗑️ Delete Fixture")
     existing_fixtures = [c for c in df.columns if c not in ["Player", "Total Paid (R)"]]
     if existing_fixtures:
@@ -87,7 +95,7 @@ if is_admin:
 st.subheader("📋 Match Attendance & Payments")
 
 if is_admin:
-    st.info("🔓 Admin Mode Active: Edits will automatically sync to Google Sheets.")
+    st.info("🔓 Admin Mode Active: Edits sync directly to Google Sheets.")
     edited_df = st.data_editor(
         df,
         column_config={
@@ -101,14 +109,14 @@ if is_admin:
     
     if not edited_df.equals(df):
         save_to_sheets(edited_df)
-        st.toast("Saved changes to Google Sheets! ✅")
+        st.toast("Saved to Google Sheets! ✅")
         st.rerun()
 else:
-    st.warning("👁️ Read-Only Mode: Log in via sidebar to edit.")
+    st.warning("👁️ Read-Only Mode: Enter password in sidebar to edit.")
     st.dataframe(df, hide_index=True, use_container_width=True)
     edited_df = df
 
-# --- CALCULATIONS & DASHBOARD ---
+# --- DASHBOARD & SUMMARY ---
 fixture_cols = [c for c in edited_df.columns if c not in ["Player", "Total Paid (R)"]]
 games_played = edited_df[fixture_cols].sum(axis=1) if fixture_cols else 0
 total_owed = games_played * MATCH_FEE
