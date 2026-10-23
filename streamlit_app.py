@@ -3,7 +3,6 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 
-# --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Lunatics Cricket - Payment Tracker", layout="wide")
 st.title("🏏 Lunatics Cricket Club — Payment Tracker")
 
@@ -11,48 +10,45 @@ ADMIN_PASSWORD = "lunatics123"
 MATCH_FEE = 140
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1ciOxcRHuexPgvkcgcvJTmWXwHpnmPm_TXpSKLbOuT_U/edit"
 
-# --- 1. AUTHORIZE GSPREAD CLIENT ---
-@st.cache_resource
-def get_gspread_client():
+# --- DIRECT CONNECTION WITHOUT DECORATORS ---
+try:
+    st.write("🔄 Step 1: Parsing secrets...")
     sec = dict(st.secrets["connections"]["gsheets"])
     sec["private_key"] = sec["private_key"].replace("\\n", "\n")
     
+    st.write("🔄 Step 2: Creating credentials...")
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
     credentials = Credentials.from_service_account_info(sec, scopes=scopes)
-    return gspread.authorize(credentials)
-
-# --- 2. CACHED DATA FETCHING (60s TTL) ---
-@st.cache_data(ttl=60)
-def load_data():
-    gc = get_gspread_client()
+    gc = gspread.authorize(credentials)
+    
+    st.write("🔄 Step 3: Opening spreadsheet...")
     sh = gc.open_by_url(SPREADSHEET_URL)
     worksheet = sh.sheet1
+    
+    st.write("🔄 Step 4: Reading data...")
     data = worksheet.get_all_records()
-    if data:
-        return pd.DataFrame(data)
-    return pd.DataFrame(columns=["Player", "Total Paid (R)"])
+    df = pd.DataFrame(data) if data else pd.DataFrame(columns=["Player", "Total Paid (R)"])
+    st.success("✅ Connected & loaded data successfully!")
 
-try:
-    df = load_data()
 except Exception as e:
-    st.error(f"❌ Connection Error Details: {type(e).__name__} — {str(e)}")
+    st.error(f"❌ Execution stopped at error: {type(e).__name__} — {str(e)}")
     st.exception(e)
     st.stop()
 
-# Ensure boolean data types for match attendance checkboxes
+# Ensure boolean types for attendance
 for col in df.columns:
     if col not in ["Player", "Total Paid (R)"]:
         df[col] = df[col].astype(bool)
 
-# --- 3. SAVE TO GOOGLE SHEETS FUNCTION ---
+# --- SIDEBAR: Admin Controls ---
+st.sidebar.header("🔒 Admin Access")
+user_pwd = st.sidebar.text_input("Enter Admin Password to Edit", type="password")
+is_admin = (user_pwd == ADMIN_PASSWORD)
+
 def save_to_sheets(updated_df):
-    gc = get_gspread_client()
-    sh = gc.open_by_url(SPREADSHEET_URL)
-    worksheet = sh.sheet1
-    
     export_df = updated_df.copy()
     for col in export_df.columns:
         if col not in ["Player", "Total Paid (R)"]:
@@ -60,17 +56,11 @@ def save_to_sheets(updated_df):
             
     worksheet.clear()
     worksheet.update([export_df.columns.values.tolist()] + export_df.values.tolist())
-    st.cache_data.clear()  # Flush cache on write to reflect changes immediately
-
-# --- 4. SIDEBAR: ADMIN CONTROLS ---
-st.sidebar.header("🔒 Admin Access")
-user_pwd = st.sidebar.text_input("Enter Admin Password to Edit", type="password")
-is_admin = (user_pwd == ADMIN_PASSWORD)
 
 if is_admin:
     st.sidebar.success("Admin Unlocked ✅")
     
-    # Add New Fixture
+    # 1. ADD FIXTURE
     st.sidebar.header("➕ Add New Fixture")
     fixture_name = st.sidebar.text_input("Fixture Name (e.g., Misfits, Match 3)")
 
@@ -85,7 +75,7 @@ if is_admin:
         else:
             st.sidebar.error("Please enter a fixture name.")
 
-    # Delete Fixture
+    # 2. DELETE FIXTURE
     st.sidebar.header("🗑️ Delete Fixture")
     existing_fixtures = [c for c in df.columns if c not in ["Player", "Total Paid (R)"]]
     if existing_fixtures:
@@ -96,7 +86,7 @@ if is_admin:
             st.sidebar.success(f"Removed '{fixture_to_remove}'")
             st.rerun()
 
-# --- 5. MAIN DATA TABLE ---
+# --- MAIN TABLE ---
 st.subheader("📋 Match Attendance & Payments")
 
 if is_admin:
@@ -121,7 +111,7 @@ else:
     st.dataframe(df, hide_index=True, use_container_width=True)
     edited_df = df
 
-# --- 6. CALCULATIONS & DASHBOARD ---
+# --- CALCULATIONS & DASHBOARD ---
 fixture_cols = [c for c in edited_df.columns if c not in ["Player", "Total Paid (R)"]]
 games_played = edited_df[fixture_cols].sum(axis=1) if fixture_cols else 0
 total_owed = games_played * MATCH_FEE
