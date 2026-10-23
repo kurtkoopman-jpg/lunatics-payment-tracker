@@ -6,17 +6,32 @@ st.set_page_config(page_title="Lunatics Cricket - Payment Tracker", layout="wide
 
 st.title("🏏 Lunatics Cricket Club — Payment Tracker")
 
-# Set Admin Password
 ADMIN_PASSWORD = "lunatics123"
 MATCH_FEE = 140
 
-# Connect to Google Sheets
+# Fetch initial data from Google Sheet
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Fetch latest data from Google Sheet (cache TTL set to 0 to fetch live)
-df = conn.read(ttl=0)
+if "tracker_data" not in st.session_state:
+    try:
+        raw_df = conn.read(ttl=0)
+        st.session_state.tracker_data = raw_df
+    except Exception:
+        # Fallback if connection fails
+        PLAYERS = [
+            "Kurt Koopman", "Bjorn Harmse", "Earl Koopman", "Zamile Mqu",
+            "Paul Steyn", "Regan Koopman", "Sherwon Tarentaal", "Ashwin Isaacs",
+            "Roland Meder", "Rejean Maralack", "Rafique Gool", "Jay-Dee Kellies",
+            "Brandon Gordon"
+        ]
+        st.session_state.tracker_data = pd.DataFrame({
+            "Player": PLAYERS,
+            "Total Paid (R)": [0.0] * len(PLAYERS)
+        })
 
-# Clean boolean columns (fixtures)
+df = st.session_state.tracker_data
+
+# Ensure fixture columns are boolean
 for col in df.columns:
     if col not in ["Player", "Total Paid (R)"]:
         df[col] = df[col].astype(bool)
@@ -36,8 +51,8 @@ if is_admin:
     if st.sidebar.button("Add Fixture"):
         if fixture_name and fixture_name not in df.columns:
             df[fixture_name] = False
-            conn.update(data=df)
-            st.sidebar.success(f"Added '{fixture_name}' to Google Sheet!")
+            st.session_state.tracker_data = df
+            st.sidebar.success(f"Added fixture '{fixture_name}'!")
             st.rerun()
         elif fixture_name in df.columns:
             st.sidebar.warning("Fixture already exists!")
@@ -51,7 +66,7 @@ if is_admin:
         fixture_to_remove = st.sidebar.selectbox("Select fixture to remove", existing_fixtures)
         if st.sidebar.button("Remove Selected Fixture"):
             df = df.drop(columns=[fixture_to_remove])
-            conn.update(data=df)
+            st.session_state.tracker_data = df
             st.sidebar.success(f"Removed '{fixture_to_remove}'")
             st.rerun()
 
@@ -59,7 +74,7 @@ if is_admin:
 st.subheader("📋 Match Attendance & Payments")
 
 if is_admin:
-    st.info("🔓 Admin Mode Active: Edits will automatically update the Google Sheet.")
+    st.info("🔓 Admin Mode Active: You can edit match ticks and payments below.")
     edited_df = st.data_editor(
         df,
         column_config={
@@ -70,12 +85,7 @@ if is_admin:
         hide_index=True,
         use_container_width=True
     )
-    
-    # Auto-save changes back to Google Sheets if edited
-    if not edited_df.equals(df):
-        conn.update(data=edited_df)
-        st.toast("Saved changes to Google Sheets! ✅")
-        st.rerun()
+    st.session_state.tracker_data = edited_df
 else:
     st.warning("👁️ Read-Only Mode: Log in via sidebar to edit.")
     st.dataframe(df, hide_index=True, use_container_width=True)
@@ -115,3 +125,14 @@ col2.metric("Total Payments Collected", f"R {summary_df['Total Paid (R)'].sum():
 col3.metric("Outstanding Balance", f"R {summary_df['Balance (R)'].sum():,.0f}")
 
 st.dataframe(summary_df, hide_index=True, use_container_width=True)
+
+# Export/Backup options in sidebar
+if is_admin:
+    st.sidebar.markdown("---")
+    csv_data = edited_df.to_csv(index=False)
+    st.sidebar.download_button(
+        label="📥 Download Updated CSV Backup",
+        data=csv_data,
+        file_name="lunatics_payment_tracker.csv",
+        mime="text/csv"
+    )
