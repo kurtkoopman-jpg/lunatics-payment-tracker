@@ -10,9 +10,8 @@ ADMIN_PASSWORD = "lunatics123"
 MATCH_FEE = 140
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1ciOxcRHuexPgvkcgcvJTmWXwHpnmPm_TXpSKLbOuT_U/edit"
 
-# --- AUTHORIZE GSPREAD ---
-@st.cache_resource
-def get_gspread_client():
+# --- PURE SEQUENTIAL EXECUTION (NO CACHING DECORATORS) ---
+try:
     sec = dict(st.secrets["connections"]["gsheets"])
     sec["private_key"] = sec["private_key"].replace("\\n", "\n")
     
@@ -21,21 +20,14 @@ def get_gspread_client():
         "https://www.googleapis.com/auth/drive"
     ]
     credentials = Credentials.from_service_account_info(sec, scopes=scopes)
-    return gspread.authorize(credentials)
-
-# --- LOAD DATA WITH 60s TTL ---
-@st.cache_data(ttl=60)
-def load_data():
-    gc = get_gspread_client()
+    gc = gspread.authorize(credentials)
+    
     sh = gc.open_by_url(SPREADSHEET_URL)
     worksheet = sh.sheet1
+    
     data = worksheet.get_all_records()
-    if data:
-        return pd.DataFrame(data)
-    return pd.DataFrame(columns=["Player", "Total Paid (R)"])
+    df = pd.DataFrame(data) if data else pd.DataFrame(columns=["Player", "Total Paid (R)"])
 
-try:
-    df = load_data()
 except Exception as e:
     st.error(f"❌ Connection Error: {type(e).__name__} — {str(e)}")
     st.exception(e)
@@ -48,10 +40,6 @@ for col in df.columns:
 
 # --- SAVE FUNCTION ---
 def save_to_sheets(updated_df):
-    gc = get_gspread_client()
-    sh = gc.open_by_url(SPREADSHEET_URL)
-    worksheet = sh.sheet1
-    
     export_df = updated_df.copy()
     for col in export_df.columns:
         if col not in ["Player", "Total Paid (R)"]:
@@ -59,7 +47,6 @@ def save_to_sheets(updated_df):
             
     worksheet.clear()
     worksheet.update([export_df.columns.values.tolist()] + export_df.values.tolist())
-    st.cache_data.clear()
 
 # --- SIDEBAR: ADMIN CONTROLS ---
 st.sidebar.header("🔒 Admin Access")
